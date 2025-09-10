@@ -164,10 +164,16 @@ def read_imu() -> Dict[str, int]:
     """
     ax, ay, az = 0, 0, 0
     gx, gy, gz = 0, 0, 0
-
+    
     with SMBus(1) as bus:
         # TODO: I2C로 MPU6050에서 6축 값 읽기
-        pass
+
+        ax = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.ACCEL_XOUT_H)
+        ay = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.ACCEL_XOUT_H+2)
+        az = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.ACCEL_XOUT_H+4)
+        gx = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.GYRO_XOUT_H)
+        gy = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.GYRO_XOUT_H+2)
+        gz = _read_word(bus, Mpu6050Reg.ADDR, Mpu6050Reg.GYRO_XOUT_H+4)
 
     return {"ax": ax, "ay": ay, "az": az, "gx": gx, "gy": gy, "gz": gz}
 
@@ -180,9 +186,18 @@ def wake_device() -> Tuple[int, int]:
     with SMBus(1) as bus:
         # TODO: PWR_MGMT_1 레지스터 읽고, sleep bit 토글
         before = bus.read_byte_data(Mpu6050Reg.ADDR, Mpu6050Reg.PWR_MGMT_1)
-        verify = "not implemented"
 
-    return before, verify
+        # MPU6050 센서 6번째 비트가 센서의 슬립모드를 제어하기 때문에 해당 비트만 확인
+        if before & 0x40:  # before의 6번째 비트가 1이면 1이 반환되어 True → Sleep 상태
+            # &는 AND 연산으로 두 비트가 모두 1이면 1, 하나라도 0이면 0이 된다.
+            after = before & ~0x40  # before의 6번째자리를 0으로 변경, after에 대입 
+            # ~ 연산자는 비트(bit)를 반전시키는 비트 NOT 연산자 
+        else:              # before의 6번째 비트가 0이면 → Wake 상태
+            after = before | 0x40   # before의 6번째자리를 0으로 변경 → Sleep
+            # |는 비트 OR 연산으로 두 비트 중 하나라도 1이면 결과가 1이 되고, 두 비트가 모두 0일 때만 0이 된다.
+        bus.write_byte_data(Mpu6050Reg.ADDR, Mpu6050Reg.PWR_MGMT_1, after)
+
+    return before, after
 
 
 def rfid_poll_once() -> Tuple[bool, Optional[bytes]]:
@@ -194,7 +209,15 @@ def rfid_poll_once() -> Tuple[bool, Optional[bytes]]:
     r = Rc522SPI()
     try:
         # TODO: REQA 전송 후 ATQA 수신
-        return False, None
+
+        # REQA 명령어 (0x26) 전송, RFID 통신의 국제 규약, 리더기가 주변 태그에 신호를 보내고 응답을 받는다 
+        atqa_data = r.transceive_7bit(0x26)
+
+        # 응답 데이터 길이가 2바이트인지
+        if len(atqa_data) == 2:
+            return True, atqa_data
+        else:
+            return False, None
     finally:
         r.close()
 
@@ -208,7 +231,8 @@ def rfid_set_antenna(on: bool) -> int:
     r = Rc522SPI()
     try:
         # TODO: 안테나 on/off 설정
-        return 0
+        r.antenna_on(on)    # 인자로 받은 변수(True,False)에 따라 Rc522Reg.TX_CONTROL 의 값 변환
+        return r.read_reg(Rc522Reg.TX_CONTROL)  # read_reg()로 Rc522Reg.TX_CONTROL 값 반환
     finally:
         r.close()
 
@@ -223,8 +247,8 @@ def ssh_get_arch() -> str:
     archs = ("aarch64", "arm64")
 
     # TODO: user_host, cmd 채우기
-    user_host = ""
-    cmd = ""
+    user_host = "hju@192.168.100.171"   # 원격 ip 주소
+    cmd = "uname -m"    # 아키텍쳐를 확인하는 명령어 uname -m
 
     if not user_host or not user_host.strip():
         raise ValueError("user_host를 반드시 채우세요.")
